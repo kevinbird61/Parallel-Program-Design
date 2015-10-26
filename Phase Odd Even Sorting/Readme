@@ -1,0 +1,3 @@
+在一開始時可以輸入array element number(n)
+並不能小於所使用的processor數量
+之後便能看到sorting後的結果

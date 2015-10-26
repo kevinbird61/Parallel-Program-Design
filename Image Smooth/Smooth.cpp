@@ -32,7 +32,8 @@ RGBTRIPLE *BMPData = NULL;
 /*********************************************************/
 int readBMP( char *fileName);        //read file
 int saveBMP( char *fileName);        //save file
-void swap(RGBTRIPLE *a, RGBTRIPLE *b);
+RGBTRIPLE fetchloc(RGBTRIPLE *arr, int Y, int X);  // get array element by address
+void swap(RGBTRIPLE **a, RGBTRIPLE **b);
 RGBTRIPLE *alloc_memory( int Y, int X );        //allocate memory - change to allocate one dimension array
 MPI_Datatype Pixel;			// For User-defined data type
 
@@ -66,19 +67,19 @@ int main(int argc,char *argv[])
     BlockSize = (int*)malloc(comm_sz*sizeof(int));
 	BlockHeight = (int*)malloc(comm_sz*sizeof(int));
 	displs = (int*)malloc(comm_sz*sizeof(int));
-	//記錄開始時間
-    MPI_Barrier(MPI_COMM_WORLD);
-	startwtime = MPI_Wtime();
 	//讀取檔案
 	if(my_rank==0){
-        if ( readBMP( infileName) )
-                cout << "Read file successfully!!" << endl;
-        else 
-                cout << "Read file fails!!" << endl;
+    if ( readBMP( infileName) )
+           cout << "Read file successfully!!" << endl;
+    else 
+           cout << "Read file fails!!" << endl;
     }
 	// Broadcast the bmp Height and bmp Width
     MPI_Bcast(&bmpInfo.biHeight,1,MPI_INT,0,MPI_COMM_WORLD);
     MPI_Bcast(&bmpInfo.biWidth,1,MPI_INT,0,MPI_COMM_WORLD);
+    if(my_rank!=0){
+		BMPSaveData = alloc_memory( bmpInfo.biHeight, bmpInfo.biWidth);
+	}
     // Calculate each block's displacement,Height and Size
     for(int i=0;i<comm_sz;i++){
 		if(bmpInfo.biHeight%comm_sz!=0&&i==comm_sz-1){
@@ -91,6 +92,9 @@ int main(int argc,char *argv[])
 		}
 		displs[i] = ((bmpInfo.biHeight/comm_sz)*bmpInfo.biWidth)*i;
 	}
+	//記錄開始時間
+    MPI_Barrier(MPI_COMM_WORLD);
+	startwtime = MPI_Wtime();
 	//動態分配記憶體給暫存空間
     BMPData = alloc_memory( bmpInfo.biHeight, bmpInfo.biWidth);
 //===========================================================處理====================================================
@@ -103,11 +107,11 @@ int main(int argc,char *argv[])
             BMPData[k+bmpInfo.biWidth] = BMPData[k]; // Shift to Next line (One dimension array)            
         }
         // Send and Recv the Upper Bound
-        MPI_Send(BMPData+BlockSize[my_rank],bmpInfo.biWidth,Pixel,(my_rank==comm_sz-1?0:my_rank+1),0,MPI_COMM_WORLD);
-        MPI_Recv(BMPData,bmpInfo.biWidth,Pixel,(my_rank>0?my_rank-1:comm_sz-1),0,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+        MPI_Send(&BMPData[BlockSize[my_rank]],bmpInfo.biWidth,Pixel,(my_rank==comm_sz-1?0:my_rank+1),0,MPI_COMM_WORLD);
+        MPI_Recv(&BMPData[0],bmpInfo.biWidth,Pixel,(my_rank>0?my_rank-1:comm_sz-1),0,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
         // Send and Recv the Lower Bound
-        MPI_Send(BMPData+bmpInfo.biWidth,bmpInfo.biWidth,Pixel,(my_rank>0?my_rank-1:comm_sz-1),1,MPI_COMM_WORLD);
-        MPI_Recv(BMPData+BlockSize[my_rank]+bmpInfo.biWidth,bmpInfo.biWidth,Pixel,(my_rank>0?(my_rank==comm_sz-1?0:my_rank+1):1),1,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+        MPI_Send(&BMPData[bmpInfo.biWidth],bmpInfo.biWidth,Pixel,(my_rank>0?my_rank-1:comm_sz-1),1,MPI_COMM_WORLD);
+        MPI_Recv(&BMPData[BlockSize[my_rank]+bmpInfo.biWidth],bmpInfo.biWidth,Pixel,(my_rank>0?(my_rank==comm_sz-1?0:my_rank+1):1),1,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
 		//進行平滑運算
 		for(int i = 1; i< BlockHeight[my_rank]+1; i++){
 			for(int j =0; j<bmpInfo.biWidth ; j++){
@@ -121,14 +125,16 @@ int main(int argc,char *argv[])
 				/*********************************************************/
 				/*與上下左右像素做平均，並四捨五入                       */
 				/*********************************************************/
-				BMPData[i*bmpInfo.biWidth+j].rgbBlue =  (double) (BMPData[i*bmpInfo.biWidth+j].rgbBlue+BMPData[Top*bmpInfo.biWidth+j].rgbBlue+BMPData[Down*bmpInfo.biWidth+j].rgbBlue+BMPData[i*bmpInfo.biWidth+Left].rgbBlue+BMPData[i*bmpInfo.biWidth+Right].rgbBlue)/5+0.5;
-				BMPData[i*bmpInfo.biWidth+j].rgbGreen =  (double) (BMPData[i*bmpInfo.biWidth+j].rgbGreen+BMPData[Top*bmpInfo.biWidth+j].rgbGreen+BMPData[Down*bmpInfo.biWidth+j].rgbGreen+BMPData[i*bmpInfo.biWidth+Left].rgbGreen+BMPData[i*bmpInfo.biWidth+Right].rgbGreen)/5+0.5;
-				BMPData[i*bmpInfo.biWidth+j].rgbRed =  (double) (BMPData[i*bmpInfo.biWidth+j].rgbRed+BMPData[Top*bmpInfo.biWidth+j].rgbRed+BMPData[Down*bmpInfo.biWidth+j].rgbRed+BMPData[i*bmpInfo.biWidth+Left].rgbRed+BMPData[i*bmpInfo.biWidth+Right].rgbRed)/5+0.5;
+				BMPSaveData[i*bmpInfo.biWidth+j].rgbBlue =  (double) (fetchloc(BMPData,i,j).rgbBlue+fetchloc(BMPData,Top,j).rgbBlue+fetchloc(BMPData,Down,j).rgbBlue+fetchloc(BMPData,i,Left).rgbBlue+fetchloc(BMPData,i,Right).rgbBlue)/5+0.5;
+				BMPSaveData[i*bmpInfo.biWidth+j].rgbGreen =  (double) (fetchloc(BMPData,i,j).rgbGreen+fetchloc(BMPData,Top,j).rgbGreen+fetchloc(BMPData,Down,j).rgbGreen+fetchloc(BMPData,i,Left).rgbGreen+fetchloc(BMPData,i,Right).rgbGreen)/5+0.5;
+				BMPSaveData[i*bmpInfo.biWidth+j].rgbRed =  (double) (fetchloc(BMPData,i,j).rgbRed+fetchloc(BMPData,Top,j).rgbRed+fetchloc(BMPData,Down,j).rgbRed+fetchloc(BMPData,i,Left).rgbRed+fetchloc(BMPData,i,Right).rgbRed)/5+0.5;
 			}
 		}
+		//Swap
+		swap(&BMPData,&BMPSaveData);
         // Shift Back to original location
-        for(int l=bmpInfo.biWidth;l<BlockSize[my_rank]+bmpInfo.biWidth-1;l++){
-            BMPData[l-bmpInfo.biWidth] = BMPData[l];
+        for(int l=0;l<BlockSize[my_rank];l++){
+            BMPData[l] = BMPData[l+bmpInfo.biWidth];
         }
 		// 進行合併 - MPI_Gatherv
 		MPI_Gatherv(BMPData,BlockSize[my_rank],Pixel,BMPSaveData,BlockSize,displs,Pixel,0,MPI_COMM_WORLD);
@@ -137,21 +143,15 @@ int main(int argc,char *argv[])
 //===========================================================處理==================================================== 
  	//寫入檔案
     if(my_rank==0){
-        if ( saveBMP( outfileName ) )
-                cout << "Save file successfully!!" << endl;
-        else
-                cout << "Save file fails!!" << endl;
-	}
+    if ( saveBMP( outfileName ) )
+          cout << "Save file successfully!!" << endl;
+    else
+          cout << "Save file fails!!" << endl;
 	//得到結束時間，並印出執行時間
-    MPI_Barrier(MPI_COMM_WORLD);    
+    //MPI_Barrier(MPI_COMM_WORLD);    
     endwtime = MPI_Wtime();
    	cout << "The execution time = "<< endwtime-startwtime <<endl ;
-	// Free the memory
- 	free(BMPData);
- 	free(BMPSaveData);
- 	free(displs);
- 	free(BlockSize);
- 	free(BlockHeight);
+	}
  	// MPI_Final 
  	MPI_Finalize();
     return 0;
@@ -244,8 +244,12 @@ int saveBMP( char *fileName)
         return 1;
  
 }
-
-
+/*********************************************************/
+/*  Retrive location                                      */
+/*********************************************************/
+RGBTRIPLE fetchloc(RGBTRIPLE *arr, int Y, int X){
+	return arr[bmpInfo.biWidth * Y + X ];
+}
 /*********************************************************/
 /* 分配記憶體：回傳為Y*X的矩陣                           */
 /*********************************************************/
@@ -261,11 +265,11 @@ RGBTRIPLE *alloc_memory(int Y, int X )
 /*********************************************************/
 /* 交換二個指標                                          */
 /*********************************************************/
-void swap(RGBTRIPLE *a, RGBTRIPLE *b)
+void swap(RGBTRIPLE **a, RGBTRIPLE **b)
 {
 	RGBTRIPLE *temp;
-	temp = a;
-	a = b;
-	b = temp;
+	temp = *a;
+	*a = *b;
+	*b = temp;
 }
 
