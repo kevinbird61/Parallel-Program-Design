@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include <stdlib.h>i
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <mpi.h>
@@ -10,14 +10,23 @@ int city_number;
 int comm_sz;
 int **path_cost;
 /* User define function*/
+/* Use to allocate a 2-D dimension*/
 int **allocate_dimension(int row,int col);
+/* Use to make a random generation 2D*/
 int **random_population_generation(int my_rank,int row_size , int col_size);
+/* Calculate the weight */
 void weight_calculation(int **Local_p,int *pop_w);
+/* Toss and setting the rate to determine whether it should do or not do */
 int toss(int index,float rate);
+/* Crossover interface */
 void Crossover(int **Local_p,int *pop_weight,float cross_rate);
+/* Crossover Implementation */
 void Implement_Crossover(int **Local_p , int **temp,int parent1,int parent2, int t_index);
+/* Select whether if the suitable parent */
 int Select_parent(int *w,int index,int avg);
+/* Mutation implement */
 void Mutation(int **Local_p,float muta_rate);
+/* Switch the population among the population */
 void Switch_Select(int my_rank,int **Local_p,int switching_num);
 
 int main(int argc , char *argv[]){
@@ -74,23 +83,21 @@ int main(int argc , char *argv[]){
    	 		}
    	 		printf("\n");
    	 	}
-   	 }
+   	}
+   	int **sendswitching = allocate_dimension(switching_num , city_number);
+	int **recvswitching = allocate_dimension(switching_num , city_number);
    	 /* Get the generation count */
    	for(i = 0 ; i < max_generation ; i++){
    		/* Recompute the pop_weight */
    	 	weight_calculation(Local_population,pop_weight);
-   	 	for(j = 0 ; j < comm_sz ; j++){
-   	 		if(my_rank == j){
-	   	 		// Calculate "Crossover"
-	   	 		Crossover(Local_population,pop_weight,crossover_rate);
-		   	 	// Calculate "Mutation"
-		   	 	Mutation(Local_population,mutation_rate);
-		   	 	// Calculate "switching_num" and add to population
-		   	 	// Select the "MAX_POP" number and make it to next generation population
-		   	 	Switch_Select(my_rank,Local_population,switching_num);
-   	 		}
-   	 	}
-   	 	
+	   	// Calculate "Crossover"
+	   	Crossover(Local_population,pop_weight,crossover_rate);
+		// Calculate "Mutation"
+		Mutation(Local_population,mutation_rate);
+		// Calculate "switching_num" and add to population
+		// Select the "MAX_POP" number and make it to next generation population
+		// MPI_SEND , MPI_RECV
+		Switch_Select(my_rank,Local_population,switching_num);
    	 }
    	 if(my_rank == 0){
    	 	printf("\n");
@@ -102,24 +109,36 @@ int main(int argc , char *argv[]){
    	 	}
    	 }
    	 // Choosing the best result of each process
+   	 //if(my_rank == 0){
+   	 weight_calculation(Local_population,pop_weight); 
+   	 int minimal = 20000 , result;
+   	 for(i = 0; i < MAX_POP ; i++){
+   	 	if(minimal > pop_weight[i]){
+ 			minimal = pop_weight[i];
+ 	 		result = i;
+   		}
+   	 }
+   	printf("My rank %d The Best answer is %d\n",my_rank, minimal);
+   	printf("\n");
+   	
+   	int *compare = malloc(city_number*sizeof(int));
+   	 // And choosing the best result among every process's best result , ALL Send to my_rank = 0
+   	 if(my_rank != 0){
+   	 	MPI_Send(Local_population[result] , city_number , MPI_INT , 0 , my_rank , MPI_COMM_WORLD);
+   	 }
    	 if(my_rank == 0){
-   	 	weight_calculation(Local_population,pop_weight); 
-   	 	int minimal = 20000 , result;
-   	 	for(i = 0; i < MAX_POP ; i++){
-   	 		if(minimal > pop_weight[i]){
-   	 			minimal = pop_weight[i];
-   	 			result = i;
+   	 	for(i = 1;i<comm_sz;i++){
+   	 		MPI_Recv(compare,city_number , MPI_INT , i , i , MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+   	 		int weight=0;
+   	 		for(j = 0; j <city_number-1 ; j++){
+   	 			weight += path_cost[compare[j]][compare[j+1]];
+   	 		}
+   	 		if(minimal > weight){
+   	 			minimal = weight;
    	 		}
    	 	}
-   	 	// Print Out 
-   	 	for(i = 0; i < MAX_POP ; i++){
-			printf("%d ",pop_weight[i]);
-   	 	}
-   	 	printf("\n");
-   	 	printf("The Best answer is %d\n", minimal);
-   	 	printf("\n");
+   	 	printf("The Best answer among process is %d\n",minimal);
    	 }
-   	 // And choosing the best result among every process's best result
    	 
    	 /* End time (rank = 0) */
    	 if(my_rank == 0){
@@ -138,31 +157,31 @@ About Major function part:
 void Switch_Select(int my_rank,int **Local_p,int switching_num){
 	// Allocate " switching_num " array to recv from the parter and send buf to the other partner
 	int i,j;
-	int **switching = allocate_dimension(switching_num , city_number);
 	// Store the selected population to switching , do send first .
 	for(i = 0; i < switching_num ; i++){
 		for(j = 0; j < city_number ; j++){
-			switching[i][j] = Local_p[i][j];
+			//sendswitching[i][j] = Local_p[i][j];
+			Local_p[i][j] = j;
 		}
 	}
-	//printf("In Switching\n");
 	// Send Implement : Recv : Tag is yourself 
-	MPI_Send(switching , switching_num*city_number, MPI_INT , (my_rank==comm_sz-1? 0 : my_rank+1), my_rank+1 , MPI_COMM_WORLD);
+	//MPI_Send(switching , switching_num*city_number, MPI_INT , (my_rank==comm_sz-1? 0 : my_rank+1), my_rank+1 , MPI_COMM_WORLD);
 	// Recv Implement : 
-	MPI_Recv(switching , switching_num*city_number , MPI_INT , (my_rank==0? comm_sz-1 : my_rank-1) , my_rank , MPI_COMM_WORLD , MPI_STATUS_IGNORE );
+	//MPI_Recv(switching , switching_num*city_number , MPI_INT , (my_rank==0? comm_sz-1 : my_rank-1) , my_rank , MPI_COMM_WORLD , MPI_STATUS_IGNORE );
 	// Check out recv , compare the "switching num" 's weight
-	/*int i;
-	for(i=0;i<switching_num;i++){
-		
-	}*/
-	printf("In Switching , my_rank is %d\n",my_rank);
-	for(i = 0; i < switching_num ; i++){
+	//MPI_Barrier(MPI_COMM_WORLD);
+	//MPI_Sendrecv(sendswitching, switching_num*city_number , MPI_INT ,(my_rank==comm_sz-1? 0 : my_rank+1) , my_rank+1 ,recvswitching, switching_num*city_number , MPI_INT , (my_rank==0? comm_sz-1 : my_rank-1) , my_rank ,MPI_COMM_WORLD , MPI_STATUS_IGNORE);
+	
+	//printf("In Switching , my_rank is %d\n",my_rank);
+	/*for(i = 0; i < switching_num ; i++){
 		for(j = 0; j < city_number ; j++){
-			printf("%d ",switching[i][j]);
+			printf("%d ",recvswitching[i][j]);
 		}
 		printf("\n");
 	}
-	free(switching);
+	
+	free(sendswitching);
+	free(recvswitching);*/
 }
 
 void Mutation(int **Local_p,float muta_rate){
