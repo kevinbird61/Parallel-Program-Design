@@ -3,10 +3,9 @@
 #include <string.h>
 #include <time.h>
 #include <mpi.h>
-#define MAX_POP 20
-
+#define MAX_POP 10000
 /* Global variable*/
-int city_number;
+int city_number,max_pop;
 int comm_sz;
 int **path_cost;
 /* User define function*/
@@ -28,15 +27,21 @@ int Select_parent(int *w,int index,int avg);
 void Mutation(int **Local_p,float muta_rate);
 /* Switch the population among the population */
 void Switch_Select(int my_rank,int **Local_p,int switching_num);
+/* For calculate specific size of sequence */
+void weight_calculation_module(int **fraction_p,int *fraction_w,int row_size);
+/* Replace the specific sequence */
+void sequence_replacement(int **origin , int **replacer , int ori_index , int place_index);
+
 
 int main(int argc , char *argv[]){
 	/* Variable */
+	char filename[64];
 	int my_rank;
 	double startTime=0.0 , totalTime=0.0;
 	int max_generation,switching_num;
 	float crossover_rate,mutation_rate;
 	int **Local_population;
-	int *pop_weight = malloc(MAX_POP*sizeof(int));
+	//int *pop_weight = malloc(max_pop*sizeof(int));
 	int i,j,k;
 	/* Initialize MPI */
 	MPI_Init(&argc,&argv);
@@ -48,13 +53,13 @@ int main(int argc , char *argv[]){
 		startTime = MPI_Wtime();
 		/* Read from the file */
 	}
-	char *filename = argv[1];
-	FILE *fp = fopen(filename , "r");
 	/* Read from the parameter file */
-   	 char *para_file = argv[2];
+   	 char *para_file = argv[1];
    	 FILE *fpara = fopen(para_file,"r");
    	 /* Format : max generation , Crossover rate , Mutation rate , Switching number => for every process !*/
-   	 fscanf(fpara , "%d %f %f %d" , &max_generation , &crossover_rate , &mutation_rate , &switching_num);
+   	 fscanf(fpara , "%d %f %f %d %d %s" , &max_generation , &crossover_rate , &mutation_rate , &switching_num ,&max_pop , filename);
+   	 int *pop_weight = malloc(max_pop*sizeof(int));
+   	 FILE *fp = fopen(filename , "r");
    	 //printf("Max : %d ; cross rate : %f ; mutation rate : %f ; switching_num : %d \n", max_generation , crossover_rate , mutation_rate , switching_num);
 	/* Read in the size of matrix => Get "city number" */
 	city_number = (filename[strlen(filename)-7] - 48) + 10*(filename[strlen(filename)-8]-48);
@@ -69,7 +74,7 @@ int main(int argc , char *argv[]){
    	for(i = 0 ; i < comm_sz ; i++){
    		if(my_rank == i){
 	   	 /* Build Population , taking sample from a line of data , number 20~50 sequences (define on the top)*/ 
-	   	Local_population = random_population_generation(i,MAX_POP,city_number);
+	   	Local_population = random_population_generation(i,max_pop,city_number);
 	   	 /* Setting Every  Weight of each sequence of array*/
 	   	weight_calculation(Local_population,pop_weight);
 		}
@@ -77,15 +82,15 @@ int main(int argc , char *argv[]){
 	// check result => OK ; check every population is different => OK
 	// check for every weight of population sequence => OK
    	 if(my_rank == 0){
-   	 	for(j=0;j<MAX_POP;j++){
+   	 	for(j=0;j<max_pop;j++){
    	 		for(k=0;k<city_number;k++){
    	 			printf("%d " , Local_population[j][k]);
    	 		}
    	 		printf("\n");
    	 	}
    	}
-   	int **sendswitching = allocate_dimension(switching_num , city_number);
-	int **recvswitching = allocate_dimension(switching_num , city_number);
+   	//int **sendswitching = allocate_dimension(switching_num , city_number);
+	//int **recvswitching = allocate_dimension(switching_num , city_number);
    	 /* Get the generation count */
    	for(i = 0 ; i < max_generation ; i++){
    		/* Recompute the pop_weight */
@@ -95,13 +100,13 @@ int main(int argc , char *argv[]){
 		// Calculate "Mutation"
 		Mutation(Local_population,mutation_rate);
 		// Calculate "switching_num" and add to population
-		// Select the "MAX_POP" number and make it to next generation population
+		// Select the "max_pop" number and make it to next generation population
 		// MPI_SEND , MPI_RECV
 		Switch_Select(my_rank,Local_population,switching_num);
    	 }
    	 if(my_rank == 0){
    	 	printf("\n");
-   	 	for(j=0;j<MAX_POP;j++){
+   	 	for(j=0;j<max_pop;j++){
    	 		for(k=0;k<city_number;k++){
    	 			printf("%d " , Local_population[j][k]);
    	 		}
@@ -112,7 +117,7 @@ int main(int argc , char *argv[]){
    	 //if(my_rank == 0){
    	 weight_calculation(Local_population,pop_weight); 
    	 int minimal = 20000 , result;
-   	 for(i = 0; i < MAX_POP ; i++){
+   	 for(i = 0; i < max_pop ; i++){
    	 	if(minimal > pop_weight[i]){
  			minimal = pop_weight[i];
  	 		result = i;
@@ -156,38 +161,44 @@ About Major function part:
 
 void Switch_Select(int my_rank,int **Local_p,int switching_num){
 	// Allocate " switching_num " array to recv from the parter and send buf to the other partner
-	int i,j;
+	int i,j,count = 0;
+	int **switching = allocate_dimension(switching_num , city_number);
+	int *switch_weight = malloc(switching_num*sizeof(int));
+	int *local_w = malloc(max_pop*sizeof(int));	
 	// Store the selected population to switching , do send first .
 	for(i = 0; i < switching_num ; i++){
 		for(j = 0; j < city_number ; j++){
-			//sendswitching[i][j] = Local_p[i][j];
-			Local_p[i][j] = j;
+			switching[i][j] = Local_p[i][j];
 		}
 	}
 	// Send Implement : Recv : Tag is yourself 
-	//MPI_Send(switching , switching_num*city_number, MPI_INT , (my_rank==comm_sz-1? 0 : my_rank+1), my_rank+1 , MPI_COMM_WORLD);
+	MPI_Send(switching , switching_num*city_number, MPI_INT , (my_rank==comm_sz-1? 0 : my_rank+1), my_rank , MPI_COMM_WORLD);
 	// Recv Implement : 
-	//MPI_Recv(switching , switching_num*city_number , MPI_INT , (my_rank==0? comm_sz-1 : my_rank-1) , my_rank , MPI_COMM_WORLD , MPI_STATUS_IGNORE );
+	MPI_Recv(switching , switching_num*city_number , MPI_INT , (my_rank==0? comm_sz-1 : my_rank-1) , (my_rank==0? comm_sz-1 : my_rank-1) , MPI_COMM_WORLD , MPI_STATUS_IGNORE );
 	// Check out recv , compare the "switching num" 's weight
-	//MPI_Barrier(MPI_COMM_WORLD);
-	//MPI_Sendrecv(sendswitching, switching_num*city_number , MPI_INT ,(my_rank==comm_sz-1? 0 : my_rank+1) , my_rank+1 ,recvswitching, switching_num*city_number , MPI_INT , (my_rank==0? comm_sz-1 : my_rank-1) , my_rank ,MPI_COMM_WORLD , MPI_STATUS_IGNORE);
-	
-	//printf("In Switching , my_rank is %d\n",my_rank);
-	/*for(i = 0; i < switching_num ; i++){
-		for(j = 0; j < city_number ; j++){
-			printf("%d ",recvswitching[i][j]);
+	weight_calculation_module(switching,switch_weight,switching_num);
+	weight_calculation(Local_p,local_w);	
+
+	for(i = 0; i < max_pop ; i++){
+		if(switch_weight[count] < local_w[i]){
+			// replace the local_p by switching 
+			sequence_replacement(Local_p,switching,i,count);
+			count++;
+			if(count>=switching_num-1){
+				break;
+			}
 		}
-		printf("\n");
+		
 	}
-	
-	free(sendswitching);
-	free(recvswitching);*/
+	free(local_w);
+	free(switching);
+	free(switch_weight);
 }
 
 void Mutation(int **Local_p,float muta_rate){
-	// Pass through the MAX_POP , flip if it will mutation or not
+	// Pass through the max_pop , flip if it will mutation or not
 	int i,status;
-	for(i = 0; i<MAX_POP;i++){
+	for(i = 0; i<max_pop;i++){
 		status = toss(i,muta_rate);
 		if(status == 1){
 			// muta occur
@@ -202,16 +213,16 @@ void Crossover(int **Local_p,int *weight,float cross_rate){
 	// choosing the center : (city_number / 2) to (3*city_number / 4) to do crossover
 	// choosing 2 for a pair , if chosen , store to the temp(next generation) , if not , store those parent into next generation  
 	int i,j,k,status,parent1,parent2,average;
-	int **temp_pop = allocate_dimension(MAX_POP , city_number);
+	int **temp_pop = allocate_dimension(max_pop , city_number);
 	int temp_index = 0,now_index=0;
 	/*
-		When Temp_index = MAX_POP => End
+		When Temp_index = max_pop => End
 	*/
 	/* First , get the average weight */
-	for(i=0;i<MAX_POP;i++){
+	for(i=0;i<max_pop;i++){
 		average += weight[i];
 	}
-	average = average / MAX_POP;
+	average = average / max_pop;
 	
 	while(1){
 		// Step 1 : Select 2 parent ( from Local_p ) , by pop_weight , more small more better
@@ -236,13 +247,13 @@ void Crossover(int **Local_p,int *weight,float cross_rate){
 			}
 			temp_index += 2;
 		}
-		// temp_index += 2 , if temp_index > MAX_POP , then break.
-		if(temp_index >= MAX_POP){
+		// temp_index += 2 , if temp_index > max_pop , then break.
+		if(temp_index >= max_pop){
 			break;
 		}
 	}
 	// switch matrix
-	for(i = 0 ; i < MAX_POP ; i++){
+	for(i = 0 ; i < max_pop ; i++){
 		for(j = 0 ; j < city_number ; j++){
 			Local_p[i][j] = temp_pop[i][j];
 		}
@@ -330,7 +341,7 @@ void Implement_Crossover(int **Local_p , int **temp,int parent1,int parent2, int
 int Select_parent(int *w,int index,int avg){
 	int i = index,result;
 	while(1){
-		if(i >= MAX_POP){ 
+		if(i >= max_pop){ 
 		i = 0;}
 		if(w[i] <= avg){
 			result = i;
@@ -355,17 +366,43 @@ int toss(int index,float rate){
 	return 0;
 }
 
+void sequence_replacement(int **origin , int **replacer , int ori_index , int place_index){
+	// replace for one line a time
+	//printf("replace start\n");
+	int i;	
+	for(i=0;i<city_number;i++){
+		origin[ori_index][i] = replacer[place_index][i];
+	}
+	// End of replace
+	//printf("replace end\n");
+}
+
 void weight_calculation(int **Local_p,int *pop_w){
 	// Calculate every line of weight 
 	int i , j;
 	// Initialize
-	for(j = 0 ; j < MAX_POP ; j++){
+	for(j = 0 ; j < max_pop ; j++){
 		pop_w[j] = 0; 
 	}
 	// Start
-	for(i = 0; i < MAX_POP ; i++){
+	for(i = 0; i < max_pop ; i++){
 		for(j = 0 ; j < city_number -1 ; j++){
 			pop_w[i] += path_cost[ Local_p[i][j] ][  Local_p[i][j+1] ];
+		}
+	}
+}
+
+void weight_calculation_module(int **switching,int *switch_weight,int row_size){
+	// Calculate every line of weight 
+	int i , j;
+	// Initialize - row_size , because col_size is fixed => city_number
+	for(j = 0 ; j < row_size ; j++){
+		switch_weight[j] = 0; 
+	}
+	// Start
+	for(i = 0; i < row_size ; i++){
+		for(j = 0 ; j < city_number -1 ; j++){
+			switch_weight[i] += path_cost[ switching[i][j] ][  switching[i][j+1] ];
 		}
 	}
 }
